@@ -31,16 +31,19 @@ func main() {
 		panic(err)
 	}
 
-	// commands := []tgbotapi.BotCommand{
-	//
-	// 	{Command: "start", Description: "Начать работу"},
-	// 	{Command: "add", Description: "Добавить трату (/add еда 500)"},
-	// 	{Command: "month", Description: "Статистика за месяц"},
-	// 	{Command: "last_month", Description: "Статистика за прошлый месяц"},
-	// }
-	//
-	// botApi.Request(tgbotapi.NewSetMyCommands(commands...))
+	commands := []tgbotapi.BotCommand{
 
+		{Command: "start", Description: "Начать работу"},
+		{Command: "add", Description: "Добавить трату"},
+		{Command: "month", Description: "Статистика за месяц"},
+		{Command: "last_month", Description: "Статистика за прошлый месяц"},
+		{Command: "history", Description: "История последних 10 трат"},
+		{Command: "delete", Description: "Удалить последнюю трату"},
+	}
+
+	if _, err := botApi.Request(tgbotapi.NewSetMyCommands(commands...)); err != nil {
+		panic(err)
+	}
 	bot.StartBot(botApi, conn)
 	fmt.Println("DB:", os.Getenv("DATABASE_URL"))
 }

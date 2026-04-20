@@ -89,7 +89,7 @@ func StartBot(bot *tgbotapi.BotAPI, conn *pgx.Conn) {
 			start, end := utils.LastMonth()
 			MonthStat(bot, conn, update, start, end)
 
-		case strings.HasPrefix(update.Message.Text, "/deleteLast"):
+		case strings.HasPrefix(update.Message.Text, "/delete"):
 			DeleteExpenseCMD(bot, conn, update)
 
 		case strings.HasPrefix(update.Message.Text, "/history"):
