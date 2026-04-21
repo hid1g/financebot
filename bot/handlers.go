@@ -27,6 +27,12 @@ func StartBot(bot *tgbotapi.BotAPI, conn *pgx.Conn) {
 			continue
 		}
 		userId := update.Message.From.ID
+		text := update.Message.Text
+
+		if strings.HasPrefix(text, "/") {
+			delete(userState, userId)
+			delete(tempAmount, userId)
+		}
 		if state, ok := userState[userId]; ok {
 			if state == "waiting_amount" {
 				text := update.Message.Text
@@ -38,11 +44,47 @@ func StartBot(bot *tgbotapi.BotAPI, conn *pgx.Conn) {
 				}
 				tempAmount[userId] = float64(amount)
 				userState[userId] = "waiting_category"
-				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Введите категорию"))
+
+				categories, err := repo.GetCategories(ctx, conn, int(userId))
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка получения категорий😑"))
+					fmt.Println("GetCategories error:", err)
+					continue
+				}
+				rows := make([][]tgbotapi.KeyboardButton, 0)
+				for i := 0; i < len(categories); i += 2 {
+					if i+1 < len(categories) {
+						row := tgbotapi.NewKeyboardButtonRow(
+							tgbotapi.NewKeyboardButton(categories[i].Name),
+							tgbotapi.NewKeyboardButton(categories[i+1].Name),
+						)
+						rows = append(rows, row)
+					} else {
+						row := tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(categories[i].Name))
+						rows = append(rows, row)
+					}
+				}
+				rows = append(rows, tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton("Другое")))
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выберите катгеорию")
+				msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(rows...)
+				bot.Send(msg)
+
 				continue
 			}
 			if state == "waiting_category" {
 				category := update.Message.Text
+				if category == "Другое" {
+					userState[userId] = "waiting_custom_category"
+
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Введите название категории: "))
+					continue
+				}
+
+				categ, err := repo.GetCategoryByName(ctx, conn, int(userId), category)
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Категория не найдена"))
+					continue
+				}
 				amount := tempAmount[userId]
 				user, err := repo.GetUserByTgId(ctx, conn, userId)
 				if err != nil {
@@ -50,9 +92,9 @@ func StartBot(bot *tgbotapi.BotAPI, conn *pgx.Conn) {
 					continue
 				}
 				operation := repo.Operation{
-					UserID:   user.Id,
-					Amount:   amount,
-					Category: category,
+					UserID:     user.Id,
+					Amount:     amount,
+					CategoryId: categ.Id,
 				}
 				if err := repo.CreateExpense(ctx, conn, operation); err != nil {
 					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка создания траты"))
@@ -60,10 +102,50 @@ func StartBot(bot *tgbotapi.BotAPI, conn *pgx.Conn) {
 				}
 				delete(userState, userId)
 				delete(tempAmount, userId)
-				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Трата добавлена"))
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Трата добавлена")
+				msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+				bot.Send(msg)
+				continue
+			}
+			if state == "waiting_custom_category" {
+				categoryName := update.Message.Text
+				user, err := repo.GetUserByTgId(ctx, conn, userId)
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Пользователь не найден"))
+					continue
+				}
+				err = repo.CreateCategory(ctx, conn, repo.Category{
+					UserId: user.Id,
+					Name:   categoryName,
+				})
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка создания категории"))
+					continue
+				}
+				categ, err := repo.GetCategoryByName(ctx, conn, user.Id, categoryName)
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка получения категории"))
+					continue
+				}
+				amount := tempAmount[userId]
+				operation := repo.Operation{
+					UserID:     user.Id,
+					Amount:     amount,
+					CategoryId: categ.Id,
+				}
+				if err := repo.CreateExpense(ctx, conn, operation); err != nil {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка создания траты"))
+					continue
+				}
+				delete(userState, userId)
+				delete(tempAmount, userId)
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Трата добавлена")
+				msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+				bot.Send(msg)
 				continue
 			}
 		}
+
 		switch {
 		case strings.HasPrefix(update.Message.Text, "/start"):
 			if err := repo.CreateUser(ctx, conn, update.Message.From.ID); err != nil {
@@ -71,6 +153,14 @@ func StartBot(bot *tgbotapi.BotAPI, conn *pgx.Conn) {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка регистрации")
 				bot.Send(msg)
 				continue
+			}
+			userId := int(update.Message.From.ID)
+			cats, _ := repo.GetCategories(ctx, conn, int(userId))
+			if len(cats) == 0 {
+				repo.CreateCategory(ctx, conn, repo.Category{UserId: userId, Name: "Еда"})
+				repo.CreateCategory(ctx, conn, repo.Category{UserId: userId, Name: "Транспорт"})
+				repo.CreateCategory(ctx, conn, repo.Category{UserId: userId, Name: "Развлечения"})
+				repo.CreateCategory(ctx, conn, repo.Category{UserId: userId, Name: "Здоровье"})
 			}
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Регистрация выполнена")
 			bot.Send(msg)
@@ -96,50 +186,6 @@ func StartBot(bot *tgbotapi.BotAPI, conn *pgx.Conn) {
 			ShowHistory(bot, conn, update)
 		}
 	}
-}
-
-func AddTask(bot *tgbotapi.BotAPI, conn *pgx.Conn, update tgbotapi.Update) {
-	ctx := context.Background()
-	text := update.Message.Text
-	pars := strings.Split(text, " ")
-
-	if len(pars) != 3 {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "неверный формат команды. формат: /add категория сумма")
-		bot.Send(msg)
-		return
-	}
-
-	category := pars[1]
-	amountSTR := pars[2]
-	amount, err := strconv.Atoi(amountSTR)
-	if err != nil {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Неверная сумма")
-		bot.Send(msg)
-		return
-	}
-	tgId := update.Message.From.ID
-	user, err := repo.GetUserByTgId(ctx, conn, tgId)
-	if err != nil {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Пользователь не найден. Напишите /start")
-		bot.Send(msg)
-		return
-	}
-	userId := user.Id
-
-	operation := repo.Operation{
-		UserID:   userId,
-		Amount:   float64(amount),
-		Category: category,
-	}
-	if err := repo.CreateExpense(ctx, conn, operation); err != nil {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка при сохранении")
-		bot.Send(msg)
-		return
-	}
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Добавлено %s - %d", category, amount))
-
-	bot.Send(msg)
-
 }
 
 func MonthStat(bot *tgbotapi.BotAPI, conn *pgx.Conn, update tgbotapi.Update, startTime time.Time, endTime time.Time) {

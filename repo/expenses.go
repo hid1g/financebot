@@ -8,11 +8,12 @@ import (
 )
 
 type Operation struct {
-	Id        int
-	UserID    int
-	Amount    float64
-	Category  string
-	CreatedAt time.Time
+	Id         int
+	UserID     int
+	Amount     float64
+	Category   string
+	CategoryId int
+	CreatedAt  time.Time
 }
 
 type CategoryStat struct {
@@ -22,22 +23,23 @@ type CategoryStat struct {
 
 func CreateExpense(ctx context.Context, conn *pgx.Conn, operation Operation) error {
 	sqlQuery := `
-	INSERT INTO operations (user_id, amount, category)
+	INSERT INTO operations (user_id, amount, category_id)
 	VALUES ($1, $2, $3)
 	`
-	_, err := conn.Exec(ctx, sqlQuery, operation.UserID, operation.Amount, operation.Category)
+	_, err := conn.Exec(ctx, sqlQuery, operation.UserID, operation.Amount, operation.CategoryId)
 	return err
 }
 
 // Get expenses by categories
 func GetExpensesByCategory(ctx context.Context, conn *pgx.Conn, userId int, start time.Time, end time.Time) ([]CategoryStat, error) {
 	sqlQuery := `
-	SELECT category, SUM(amount) AS TOTAL
-	FROM operations
-	WHERE user_id = $1
-	AND created_at >= $2
-	AND created_at < $3
-	GROUP BY category
+		SELECT c.name, SUM(o.amount)
+		FROM operations o
+		JOIN categories c ON o.category_id = c.id
+		WHERE o.user_id = $1
+		AND o.created_at >= $2
+		AND o.created_at < $3
+		GROUP BY c.name
 	`
 
 	rows, err := conn.Query(ctx, sqlQuery, userId, start, end)
@@ -75,15 +77,15 @@ func GetTotalExpenses(ctx context.Context, conn *pgx.Conn, userId int, start tim
 }
 
 // Only 1 category
-func GetCategoryExpenses(ctx context.Context, conn *pgx.Conn, userId int, category string) (float64, error) {
+func GetCategoryExpenses(ctx context.Context, conn *pgx.Conn, userId int, categoryId int) (float64, error) {
 	sqlQuery := `
 	SELECT COALESCE(SUM(amount), 0) AS TOTAL
 	FROM operations
 	WHERE user_id = $1
-	AND category = $2
+	AND category_id = $2
 	AND created_at >= date_trunc('month', now())
 	`
-	row := conn.QueryRow(ctx, sqlQuery, userId, category)
+	row := conn.QueryRow(ctx, sqlQuery, userId, categoryId)
 	var total float64
 	err := row.Scan(&total)
 	return total, err
@@ -109,11 +111,12 @@ func DelteExpense(ctx context.Context, conn *pgx.Conn, userId int) (int64, error
 
 func History(ctx context.Context, conn *pgx.Conn, userId int) ([]Operation, error) {
 	sqlQuery := `
-	SELECT amount, category, created_at
-	FROM operations
-	WHERE user_id = $1
-	ORDER BY created_at DESC
-	LIMIT 10
+		SELECT o.amount, c.name, o.created_at
+		FROM operations o
+		JOIN categories c ON o.category_id = c.id
+		WHERE o.user_id = $1
+		ORDER BY o.created_at DESC
+		LIMIT 10
 	`
 	rows, err := conn.Query(ctx, sqlQuery, userId)
 	if err != nil {
